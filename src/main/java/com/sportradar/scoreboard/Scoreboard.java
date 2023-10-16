@@ -8,12 +8,20 @@ public interface Scoreboard {
      * Start match between home team and away team with initial score 0 - 0
      * @param homeTeamIsoCode home team iso code
      * @param awayTeamIsoCode away team iso code
-     * @param startDate
+     * @param startDate start date of the match
      * @return id of started match. It could be used to update match score or finish match.
      * I don't know possible amount of the match, so I used long as id type, because it's
      * a common practice to use long as auto increment identifier in database
      */
     Long startMatch(String homeTeamIsoCode, String awayTeamIsoCode, LocalDateTime startDate);
+
+    /**
+     * Get match(finished or not). This method was added to verify consistency of the data
+     * during testing the solution in multithreading environment
+     * @param matchId Id of the match
+     * @return match details
+     */
+    Match getMatch(Long matchId);
 
     /**
      * Update score for the corresponding match

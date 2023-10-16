@@ -4,14 +4,17 @@ import com.sportradar.scoreboard.Match;
 import com.sportradar.scoreboard.MatchSortKey;
 import com.sportradar.scoreboard.Score;
 import com.sportradar.scoreboard.Scoreboard;
+import com.sportradar.scoreboard.exception.MatchNotFoundException;
 
 import java.time.LocalDateTime;
+import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashMap;
 import java.util.Locale;
 import java.util.Map;
 import java.util.TreeMap;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.locks.ReentrantReadWriteLock;
 
 //TODO: Implement concurrency support
 public class ScoreboardImpl implements Scoreboard {
@@ -23,6 +26,7 @@ public class ScoreboardImpl implements Scoreboard {
     public Map<MatchSortKey, Match> sortedMatches = new TreeMap<>();
     public AtomicInteger matchIdCounter = new AtomicInteger();
     private static final Map<String, String> countriesByIsoCode = initCountriesByCode();
+    private final ReentrantReadWriteLock reentrantReadWriteLock = new ReentrantReadWriteLock();
 
     private static Map<String, String> initCountriesByCode() {
         Map<String, String> countriesByIsoCode = new HashMap<>();
@@ -41,13 +45,32 @@ public class ScoreboardImpl implements Scoreboard {
     public Long startMatch(String homeTeamIsoCode,
                            String awayTeamIsoCode, LocalDateTime startDate) {
         // TODO: Add validation that there is no running match with any of team
-        String homeTeamCountryName = getCountryName(homeTeamIsoCode);
-        String awayTeamCountryName = getCountryName(awayTeamIsoCode);
-        final var match = new Match(matchIdCounter.incrementAndGet(),
-                new Score(homeTeamCountryName, 0),
-                new Score(awayTeamCountryName, 0), startDate);
-        updateMatch(match, match);
-        return match.id();
+        try {
+            this.reentrantReadWriteLock.writeLock().lock();
+            String homeTeamCountryName = getCountryName(homeTeamIsoCode);
+            String awayTeamCountryName = getCountryName(awayTeamIsoCode);
+            final var match = new Match(matchIdCounter.incrementAndGet(),
+                    new Score(homeTeamCountryName, 0),
+                    new Score(awayTeamCountryName, 0), startDate, false);
+            updateMatch(match, match);
+            return match.id();
+        } finally {
+            this.reentrantReadWriteLock.writeLock().unlock();
+        }
+    }
+
+    @Override
+    public Match getMatch(final Long matchId) {
+        try {
+            reentrantReadWriteLock.readLock().lock();
+            Match match = this.matchesById.get(matchId);
+            if (match == null) {
+                throw new MatchNotFoundException();
+            }
+            return match;
+        } finally {
+            reentrantReadWriteLock.readLock().unlock();
+        }
     }
 
     private static String getCountryName(String iso3Code) {
@@ -59,37 +82,19 @@ public class ScoreboardImpl implements Scoreboard {
         return countryName;
     }
 
-    /**
-     * This operation is idempotent. According to requirements,
-     * it's needed to update operation with absolute values. It means that
-     * result of operation doesn't depend on previous match value.
-     * Subsequence of it that it's enough to create a new match object each time to
-     * make this operation atomic.
-     * There is a possible case when {@link ScoreboardImpl#matchesById}
-     * and {@link ScoreboardImpl#sortedMatches} could have different values
-     * for the same match. But according to the requirements there is no need to
-     * check the score for a single match that's why I don't add additional
-     * code to make this update atomic/synchronized
-     *
-     * @param matchId       identifier of the match
-     * @param homeTeamScore home team score
-     * @param awayTeamScore away team score
-     */
     @Override
     public void updateScore(Long matchId, int homeTeamScore, int awayTeamScore) {
-        // TODO: Add validation that such match exists
         // TODO: Add validation that scores are positives and at least one is higher than previous one
-        final Match match = matchesById.get(matchId);
-        // If match doesn't exist, it means it finished or not started.
-        // It will be nice to throw exception in a case we are updating the not started match,
-        // but now it's difficult to differ it from finished one
-        // According to the requirements,
-        // we could ignore results of finished matches
-        if (match != null) {
-            Match newMatch = new Match(matchId,
-                    new Score(match.homeTeamScore().country(), homeTeamScore),
-                    new Score(match.awayTeamScore().country(), awayTeamScore), match.startDate());
+        try {
+            this.reentrantReadWriteLock.writeLock().lock();
+            final Match match = matchesById.get(matchId);
+            if (match == null) {
+                throw new MatchNotFoundException();
+            }
+            Match newMatch = match.createMatchCopy();
             updateMatch(match, newMatch);
+        } finally {
+            this.reentrantReadWriteLock.writeLock().unlock();
         }
     }
 
@@ -99,30 +104,30 @@ public class ScoreboardImpl implements Scoreboard {
         sortedMatches.put(newMatch.compoundSortKey(), newMatch);
     }
 
-    /**
-     * The possible side effect of this operation that in
-     * a case if operation failed after removing match from
-     * {@link ScoreboardImpl#sortedMatches}. The obsolete match still could
-     * be stored {@link ScoreboardImpl#matchesById}.
-     * Due to according to the requirements there is no need to
-     * check the result of the single match and the requirement to
-     * implement the simplest solution you can think of
-     * that works, I ignored this case. In real world, database transactions
-     * the simplest option to cover it.
-     *
-     * @param matchId identifier of the match
-     */
     @Override
     public void finishMatch(Long matchId) {
-        Match matchToRemove = matchesById.get(matchId);
-        if (matchToRemove != null) {
+        try {
+            this.reentrantReadWriteLock.writeLock().lock();
+            Match matchToRemove = matchesById.get(matchId);
+            if (matchToRemove == null) {
+                throw new MatchNotFoundException();
+            }
             sortedMatches.remove(matchToRemove.compoundSortKey());
-            matchesById.remove(matchId);
+            Match newMatch = matchToRemove.createFinishedMatchCopy();
+            updateMatch(matchToRemove, newMatch);
+        } finally {
+            this.reentrantReadWriteLock.writeLock().unlock();
         }
     }
 
     @Override
     public Collection<Match> getRunningMatchesSortedByTotalScoreAndMostRecentStarted() {
-        return sortedMatches.values();
+        try {
+            reentrantReadWriteLock.readLock().lock();
+            return new ArrayList<>(sortedMatches.values());
+        } finally {
+            reentrantReadWriteLock.readLock().unlock();
+        }
+
     }
 }
