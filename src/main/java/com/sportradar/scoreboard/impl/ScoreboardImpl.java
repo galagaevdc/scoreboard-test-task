@@ -59,32 +59,66 @@ public class ScoreboardImpl implements Scoreboard {
         return countryName;
     }
 
+    /**
+     * This operation is idempotent. According to requirements,
+     * it's needed to update operation with absolute values. It means that
+     * result of operation doesn't depend on previous match value.
+     * Subsequence of it that it's enough to create a new match object each time to
+     * make this operation atomic.
+     * There is a possible case when {@link ScoreboardImpl#matchesById}
+     * and {@link ScoreboardImpl#sortedMatches} could have different values
+     * for the same match. But according to the requirements there is no need to
+     * check the score for a single match that's why I don't add additional
+     * code to make this update atomic/synchronized
+     *
+     * @param matchId       identifier of the match
+     * @param homeTeamScore home team score
+     * @param awayTeamScore away team score
+     */
     @Override
     public void updateScore(Long matchId, int homeTeamScore, int awayTeamScore) {
         // TODO: Add validation that such match exists
         // TODO: Add validation that scores are positives and at least one is higher than previous one
         final Match match = matchesById.get(matchId);
-        //TODO: To consider. Initial idea is to re create match to make this operation atomic
-        Match newMatch = new Match(matchId,
-                new Score(match.homeTeamScore().country(), homeTeamScore),
-                new Score(match.awayTeamScore().country(), awayTeamScore), match.startDate());
-        updateMatch(match, newMatch);
+        // If match doesn't exist, it means it finished or not started.
+        // It will be nice to throw exception in a case we are updating the not started match,
+        // but now it's difficult to differ it from finished one
+        // According to the requirements,
+        // we could ignore results of finished matches
+        if (match != null) {
+            Match newMatch = new Match(matchId,
+                    new Score(match.homeTeamScore().country(), homeTeamScore),
+                    new Score(match.awayTeamScore().country(), awayTeamScore), match.startDate());
+            updateMatch(match, newMatch);
+        }
     }
 
     private void updateMatch(Match match, Match newMatch) {
-        // TODO: This operation should be atomic or synchronized
         matchesById.put(match.id(), newMatch);
         sortedMatches.remove(match.compoundSortKey());
         sortedMatches.put(newMatch.compoundSortKey(), newMatch);
     }
 
+    /**
+     * The possible side effect of this operation that in
+     * a case if operation failed after removing match from
+     * {@link ScoreboardImpl#sortedMatches}. The obsolete match still could
+     * be stored {@link ScoreboardImpl#matchesById}.
+     * Due to according to the requirements there is no need to
+     * check the result of the single match and the requirement to
+     * implement the simplest solution you can think of
+     * that works, I ignored this case. In real world, database transactions
+     * the simplest option to cover it.
+     *
+     * @param matchId identifier of the match
+     */
     @Override
     public void finishMatch(Long matchId) {
-        // TODO: This operation should be atomic or synchronized
-        // TODO: Consider add validation that such match exists or
-        //  not(for concurrency reasons it could be better to ignore such case)
-        Match removedMatch = matchesById.remove(matchId);
-        sortedMatches.remove(removedMatch.compoundSortKey());
+        Match matchToRemove = matchesById.get(matchId);
+        if (matchToRemove != null) {
+            sortedMatches.remove(matchToRemove.compoundSortKey());
+            matchesById.remove(matchId);
+        }
     }
 
     @Override
