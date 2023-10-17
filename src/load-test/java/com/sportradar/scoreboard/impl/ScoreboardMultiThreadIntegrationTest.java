@@ -19,6 +19,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+import java.util.concurrent.locks.ReentrantReadWriteLock;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.fail;
@@ -26,34 +27,32 @@ import static org.junit.jupiter.api.Assertions.fail;
 public class ScoreboardMultiThreadIntegrationTest {
     private static final Logger logger = LoggerFactory.getLogger(ScoreboardMultiThreadIntegrationTest.class);
 
-    private static final LocalDateTime FIRST_MATCH_DATE = LocalDateTime.of(2022, Month.JULY, 15,
-            19, 30, 40);
+    private static final LocalDateTime FIRST_MATCH_DATE = LocalDateTime.of(2022, Month.JULY, 15, 19, 30, 40);
     private static final int HOME_TEAM_UPDATE_FIRST = 1;
     private static final int MATCH_TO_FINISH_HOME_SCORE = 5;
-    private static final int AWAY_TEAM_UPDATE_FIRST = 5;
+    private static final int AWAY_TEAM_UPDATE_FIRST = 7;
     private static final int HOME_TEAM_UPDATE_SECOND = 3;
     private static final int AWAY_TEAM_UPDATE_SECOND = 0;
     private static final int HOME_TEAM_INITIAL_VALUE = 0;
     private static final int AWAY_TEAM_INITIAL_VALUE = 0;
     private static final int MATCH_TO_FINISH_AWAY_SCORE = 1;
-    private static volatile Long matchId;
-    private static volatile Long matchIdToFinish;
+    private static final ReentrantReadWriteLock pauseFinishUpdateLock = new ReentrantReadWriteLock();
 
     @RepeatedTest(1000)
     public void testInMultiThreading() throws InterruptedException, ExecutionException, TimeoutException {
         final Scoreboard scoreboard = new ScoreboardImpl();
+        final Long matchId = startMatch(scoreboard);
+        final Long matchIdToFinish = startMatchToFinish(scoreboard);
 
         ExecutorService executorService = Executors.newFixedThreadPool(10);
 
         final List<Future<?>> futures = new ArrayList<>();
-        futures.add(executorService.submit(() -> startMatch(scoreboard)));
-        futures.add(executorService.submit(() -> startMatchToFinish(scoreboard)));
         futures.add(executorService.submit(() -> updateScore(scoreboard, HOME_TEAM_UPDATE_FIRST, AWAY_TEAM_UPDATE_FIRST, matchId)));
         futures.add(executorService.submit(() -> updateScore(scoreboard, HOME_TEAM_UPDATE_SECOND, AWAY_TEAM_UPDATE_SECOND, matchId)));
         futures.add(executorService.submit(() -> updateScore(scoreboard, MATCH_TO_FINISH_HOME_SCORE, MATCH_TO_FINISH_AWAY_SCORE, matchIdToFinish)));
-        futures.add(executorService.submit(() -> finishMatch(scoreboard)));
-        futures.add(executorService.submit(() -> finishMatch(scoreboard)));
-        futures.add(executorService.submit(() -> checkScoreboard(scoreboard)));
+        futures.add(executorService.submit(() -> finishMatch(scoreboard, matchIdToFinish)));
+        futures.add(executorService.submit(() -> finishMatch(scoreboard, matchIdToFinish)));
+        futures.add(executorService.submit(() -> checkScoreboard(scoreboard, matchId, matchIdToFinish)));
 
         for (Future<?> future : futures) {
             future.get(1, TimeUnit.SECONDS);
@@ -61,58 +60,76 @@ public class ScoreboardMultiThreadIntegrationTest {
     }
 
     private static void updateScore(Scoreboard scoreboard, int homeTeamScore, int awayTeamScore, Long idOfMatch) {
-        if (idOfMatch != null) {
-            logger.info("Updating score for match {} ", matchId);
-            try {
-                scoreboard.updateScore(idOfMatch, homeTeamScore, awayTeamScore);
-                logger.info("Updating score finished {}", matchId);
-            } catch (MatchNotFoundException matchNotFoundException) {
-                logger.info("Match not started yet {}", matchId);
-            }
+        try {
+            pauseFinishUpdateLock.readLock().lock();
+            logger.info("Updating score for match {} home score {} away score {} ", idOfMatch, homeTeamScore, awayTeamScore);
+            scoreboard.updateScore(idOfMatch, homeTeamScore, awayTeamScore);
+            logger.info("Updating score finished {}", idOfMatch);
+        } catch (MatchNotFoundException matchNotFoundException) {
+            logger.info("Match not started yet {}", idOfMatch);
+        } finally {
+            pauseFinishUpdateLock.readLock().unlock();
+        }
+
+    }
+
+    private Long startMatch(final Scoreboard scoreboard) {
+        logger.info("Start match");
+        Long matchId = scoreboard.startMatch("MEX", "CAN", FIRST_MATCH_DATE);
+
+        logger.info("Start match is completed {}", matchId);
+        return matchId;
+    }
+
+    private Long startMatchToFinish(final Scoreboard scoreboard) {
+        logger.info("Start match to finish");
+        Long matchIdToFinish = scoreboard.startMatch("ESP", "FRA", FIRST_MATCH_DATE);
+
+        logger.info("Start match is completed {}", matchIdToFinish);
+        return matchIdToFinish;
+    }
+
+    private void finishMatch(Scoreboard scoreboard, Long matchIdToFinish) {
+        try {
+            pauseFinishUpdateLock.readLock().lock();
+            logger.info("Finishing match {}", matchIdToFinish);
+            scoreboard.finishMatch(matchIdToFinish);
+            logger.info("Finish match {} is completed", matchIdToFinish);
+        } catch (final MatchNotFoundException matchNotFoundException) {
+            logger.info("Match not started yet {}", matchIdToFinish);
+        } finally {
+            pauseFinishUpdateLock.readLock().unlock();
         }
     }
 
-    private void startMatch(final Scoreboard scoreboard) {
-        logger.info("Start match");
-        matchId = scoreboard.startMatch("MEX",
-                "CAN", FIRST_MATCH_DATE);
-
-        logger.info("Start match is completed");
-    }
-
-    private void startMatchToFinish(final Scoreboard scoreboard) {
-        logger.info("Start match");
-        matchIdToFinish = scoreboard.startMatch("ESP",
-                "FRA", FIRST_MATCH_DATE);
-
-        logger.info("Start match is completed");
-    }
-
-    private void finishMatch(Scoreboard scoreboard) {
-        if (matchIdToFinish != null) {
-            try {
-                logger.info("Finishing match {}", matchIdToFinish);
-                scoreboard.finishMatch(matchIdToFinish);
-                logger.info("Finish match {} is completed", matchIdToFinish);
-            } catch (final MatchNotFoundException matchNotFoundException) {
-                logger.info("Match not started yet {}", matchIdToFinish);
-            }
-        }
-    }
-
-    private static void checkScoreboard(Scoreboard scoreboard) {
+    private static void checkScoreboard(Scoreboard scoreboard, long matchId, Long matchIdToFinish) {
         logger.info("Checking scoreboard");
-        final Collection<Match> runningMatches = scoreboard.getRunningMatchesSortedByTotalScoreAndMostRecentStarted();
+        Collection<Match> runningMatches;
+        Match match;
+        Match matchToFinishById;
+
+        /*
+         * Pause update and finish threads in order to prevent update of
+         * match in other threads before assertion.
+         */
+        try {
+            pauseFinishUpdateLock.writeLock().lock();
+            runningMatches = scoreboard.getRunningMatchesSortedByTotalScoreAndMostRecentStarted();
+            match = scoreboard.getMatch(matchId);
+            matchToFinishById = scoreboard.getMatch(matchIdToFinish);
+        } finally {
+            pauseFinishUpdateLock.writeLock().unlock();
+        }
 
         if (runningMatches.size() == 1) {
             final Iterator<Match> iterator = runningMatches.iterator();
 
             final Match firstMatch = iterator.next();
             if (firstMatch.id() == matchId) {
-                assertFirstMatch(scoreboard, firstMatch);
-                assertMatchToFinish(scoreboard, null);
+                assertFirstMatch(firstMatch, matchId, match);
+                assertMatchToFinish(null, matchIdToFinish, matchToFinishById);
             } else {
-                assertMatchToFinish(scoreboard, firstMatch);
+                assertMatchToFinish(firstMatch, matchIdToFinish, matchToFinishById);
             }
         }
 
@@ -122,17 +139,17 @@ public class ScoreboardMultiThreadIntegrationTest {
             final Match firstMatch = iterator.next();
 
             if (firstMatch.id() == matchId) {
-                assertFirstMatch(scoreboard, firstMatch);
+                assertFirstMatch(firstMatch, matchId, match);
             } else {
-                assertMatchToFinish(scoreboard, firstMatch);
+                assertMatchToFinish(firstMatch, matchIdToFinish, matchToFinishById);
             }
 
             final Match secondMatch = iterator.next();
 
             if (secondMatch.id() == matchId) {
-                assertFirstMatch(scoreboard, secondMatch);
+                assertFirstMatch(secondMatch, matchId, match);
             } else {
-                assertMatchToFinish(scoreboard, secondMatch);
+                assertMatchToFinish(secondMatch, matchIdToFinish, matchToFinishById);
             }
 
         }
@@ -141,23 +158,22 @@ public class ScoreboardMultiThreadIntegrationTest {
         logger.info("Checking scoreboard finished");
     }
 
-    private static void assertMatchToFinish(Scoreboard scoreboard, Match matchToFinish) {
+    private static void assertMatchToFinish(Match matchToFinish, Long matchIdToFinish, Match matchToFinishById) {
         try {
-            Match match = scoreboard.getMatch(matchIdToFinish);
 
             if (matchToFinish != null) {
-                assertEquals(matchToFinish.id(), match.id());
-                assertEquals(matchToFinish.homeTeamScore().score(), match.homeTeamScore().score());
-                assertEquals(matchToFinish.awayTeamScore().score(), match.awayTeamScore().score());
+                assertEquals(matchToFinish.id(), matchToFinishById.id());
+                assertEquals(matchToFinish.homeTeamScore().score(), matchToFinishById.homeTeamScore().score());
+                assertEquals(matchToFinish.awayTeamScore().score(), matchToFinishById.awayTeamScore().score());
 
                 assertEquals(matchToFinish.homeTeamScore().country(), "Spain");
                 assertEquals(matchToFinish.awayTeamScore().country(), "France");
             }
 
-            if (match.homeTeamScore().score() == MATCH_TO_FINISH_HOME_SCORE) {
-                assertEquals(match.awayTeamScore().score(), MATCH_TO_FINISH_AWAY_SCORE);
-            } else if (match.homeTeamScore().score() == HOME_TEAM_INITIAL_VALUE) {
-                assertEquals(match.awayTeamScore().score(), AWAY_TEAM_INITIAL_VALUE);
+            if (matchToFinishById.homeTeamScore().score() == MATCH_TO_FINISH_HOME_SCORE) {
+                assertEquals(matchToFinishById.awayTeamScore().score(), MATCH_TO_FINISH_AWAY_SCORE);
+            } else if (matchToFinishById.homeTeamScore().score() == HOME_TEAM_INITIAL_VALUE) {
+                assertEquals(matchToFinishById.awayTeamScore().score(), AWAY_TEAM_INITIAL_VALUE);
             } else {
                 fail("Unexpected home score");
             }
@@ -166,8 +182,7 @@ public class ScoreboardMultiThreadIntegrationTest {
         }
     }
 
-    private static void assertFirstMatch(Scoreboard scoreboard, Match firstMatch) {
-        Match runningMatch = scoreboard.getMatch(matchId);
+    private static void assertFirstMatch(Match firstMatch, long matchId, Match runningMatch) {
 
         assertEquals(firstMatch.id(), runningMatch.id());
         assertEquals(firstMatch.homeTeamScore().score(), runningMatch.homeTeamScore().score());

@@ -91,7 +91,7 @@ public class ScoreboardImpl implements Scoreboard {
             if (match == null) {
                 throw new MatchNotFoundException();
             }
-            Match newMatch = match.createMatchCopy();
+            Match newMatch = match.createMatchCopy(homeTeamScore, awayTeamScore);
             updateMatch(match, newMatch);
         } finally {
             this.reentrantReadWriteLock.writeLock().unlock();

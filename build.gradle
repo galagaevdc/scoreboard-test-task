@@ -5,6 +5,28 @@ plugins {
 group 'com.sportradar'
 version '1.0-SNAPSHOT'
 
+
+sourceSets {
+    load {
+        java.srcDir "$projectDir/src/load-test/java"
+        resources.srcDir "$projectDir/src/load-test/resources"
+        compileClasspath += main.output + test.output
+        runtimeClasspath += main.output + test.output
+    }
+}
+
+configurations {
+    loadImplementation.extendsFrom testImplementation
+    loadRuntime.extendsFrom testRuntime
+    loadRuntimeOnly.extendsFrom testRuntimeOnly
+}
+
+task loadTest(type: Test) {
+    testClassesDirs = sourceSets.load.output.classesDirs
+    classpath = sourceSets.load.runtimeClasspath
+    useJUnitPlatform()
+}
+
 repositories {
     mavenCentral()
 }
