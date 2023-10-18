@@ -36,6 +36,8 @@ public class ScoreboardImplUnitTest {
     public static final String ONE_MORE_HOME_COUNRY = "URY";
     public static final String ONE_MORE_AWAY_COUNTRY = "ITA";
     public static final long NOT_EXISTING_MATCH = 1L;
+    public static final String PLAYING_COUNTRY_NAME = "Spain";
+    public static final int INITIAL_SCORE = 0;
 
     private static Stream<Arguments> getAlreadyPlayingParameters() {
         return Stream.of(
@@ -48,7 +50,7 @@ public class ScoreboardImplUnitTest {
 
     private static Stream<Arguments> getNegativeScoreParameters() {
         return Stream.of(
-                Arguments.of(0, -1),
+                Arguments.of(INITIAL_SCORE, -1),
                 Arguments.of(-2, 5)
         );
     }
@@ -130,6 +132,20 @@ public class ScoreboardImplUnitTest {
         assertEquals(1, matches.size());
         final Set<Long> matchIds = matches.stream().map(Match::id).collect(Collectors.toSet());
         assertTrue(matchIds.contains(firstMatchId));
+    }
+
+    @Test
+    public void shouldReturnMatchByIdWhenStarted() {
+        Scoreboard scoreboard = new ScoreboardImpl();
+        Long matchId = scoreboard.startMatch(PLAYING_COUNTRY, ALREADY_PLAYING_COUNTRY_CODE, MATCH_DATE);
+
+        Match match = scoreboard.getMatch(matchId);
+
+        assertEquals(match.id(), matchId);
+        assertEquals(match.homeTeamScore().score(), INITIAL_SCORE);
+        assertEquals(match.homeTeamScore().country(), PLAYING_COUNTRY_NAME);
+        assertEquals(match.awayTeamScore().score(), INITIAL_SCORE);
+        assertEquals(match.awayTeamScore().country(), ALREADY_PLAYING_COUNTRY_NAME);
     }
 
     @Test
