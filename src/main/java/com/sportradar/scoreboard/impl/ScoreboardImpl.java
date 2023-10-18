@@ -1,10 +1,13 @@
 package com.sportradar.scoreboard.impl;
 
-import com.sportradar.scoreboard.Match;
-import com.sportradar.scoreboard.MatchSortKey;
-import com.sportradar.scoreboard.Score;
+import com.sportradar.scoreboard.model.Match;
+import com.sportradar.scoreboard.model.MatchSortKey;
+import com.sportradar.scoreboard.model.Score;
 import com.sportradar.scoreboard.Scoreboard;
+import com.sportradar.scoreboard.exception.CountryNotSupportedException;
 import com.sportradar.scoreboard.exception.MatchNotFoundException;
+import com.sportradar.scoreboard.exception.ScoreNotPositiveException;
+import com.sportradar.scoreboard.exception.TeamAlreadyPlayingException;
 
 import java.time.LocalDateTime;
 import java.util.ArrayList;
@@ -16,7 +19,6 @@ import java.util.TreeMap;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 
-//TODO: Implement concurrency support
 public class ScoreboardImpl implements Scoreboard {
     /**
      * Initial idea that write pattern is extremely less frequent, that's why it will be better
@@ -33,7 +35,6 @@ public class ScoreboardImpl implements Scoreboard {
         final String[] isoCountries = Locale.getISOCountries();
 
         for (final String country : isoCountries) {
-            // country name , country code map
             Locale locale = new Locale("", country);
             countriesByIsoCode.put(locale.getISO3Country(),
                     locale.getDisplayCountry(Locale.ENGLISH));
@@ -44,11 +45,13 @@ public class ScoreboardImpl implements Scoreboard {
     @Override
     public Long startMatch(String homeTeamIsoCode,
                            String awayTeamIsoCode, LocalDateTime startDate) {
-        // TODO: Add validation that there is no running match with any of team
         try {
             this.reentrantReadWriteLock.writeLock().lock();
             String homeTeamCountryName = getCountryName(homeTeamIsoCode);
             String awayTeamCountryName = getCountryName(awayTeamIsoCode);
+            checkIsCountryPlaying(homeTeamCountryName);
+            checkIsCountryPlaying(awayTeamCountryName);
+
             final var match = new Match(matchIdCounter.incrementAndGet(),
                     new Score(homeTeamCountryName, 0),
                     new Score(awayTeamCountryName, 0), startDate, false);
@@ -59,13 +62,22 @@ public class ScoreboardImpl implements Scoreboard {
         }
     }
 
+    private void checkIsCountryPlaying(String homeTeamCountryName) {
+        matchesById.values().stream().filter(match ->
+                        match.awayTeamScore().country().equals(homeTeamCountryName)
+                                || match.homeTeamScore().country().equals(homeTeamCountryName))
+                .findAny().ifPresent(match -> {
+                    throw new TeamAlreadyPlayingException(homeTeamCountryName);
+                });
+    }
+
     @Override
     public Match getMatch(final Long matchId) {
         try {
             reentrantReadWriteLock.readLock().lock();
             Match match = this.matchesById.get(matchId);
             if (match == null) {
-                throw new MatchNotFoundException();
+                throw new MatchNotFoundException(matchId);
             }
             return match;
         } finally {
@@ -76,20 +88,21 @@ public class ScoreboardImpl implements Scoreboard {
     private static String getCountryName(String iso3Code) {
         String countryName = countriesByIsoCode.get(iso3Code);
         if (countryName == null) {
-            //TODO: Consider to change to domain exception
-            throw new IllegalArgumentException("Unable found country for code " + iso3Code);
+            throw new CountryNotSupportedException(iso3Code);
         }
         return countryName;
     }
 
     @Override
     public void updateScore(Long matchId, int homeTeamScore, int awayTeamScore) {
-        // TODO: Add validation that scores are positives and at least one is higher than previous one
         try {
             this.reentrantReadWriteLock.writeLock().lock();
+            if (homeTeamScore < 0 || awayTeamScore < 0) {
+                throw new ScoreNotPositiveException();
+            }
             final Match match = matchesById.get(matchId);
             if (match == null) {
-                throw new MatchNotFoundException();
+                throw new MatchNotFoundException(matchId);
             }
             Match newMatch = match.createMatchCopy(homeTeamScore, awayTeamScore);
             updateMatch(match, newMatch);
@@ -110,11 +123,11 @@ public class ScoreboardImpl implements Scoreboard {
             this.reentrantReadWriteLock.writeLock().lock();
             Match matchToRemove = matchesById.get(matchId);
             if (matchToRemove == null) {
-                throw new MatchNotFoundException();
+                throw new MatchNotFoundException(matchId);
             }
             sortedMatches.remove(matchToRemove.compoundSortKey());
             Match newMatch = matchToRemove.createFinishedMatchCopy();
-            updateMatch(matchToRemove, newMatch);
+            matchesById.put(newMatch.id(), newMatch);
         } finally {
             this.reentrantReadWriteLock.writeLock().unlock();
         }

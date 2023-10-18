@@ -1,6 +1,6 @@
 package com.sportradar.scoreboard.impl;
 
-import com.sportradar.scoreboard.Match;
+import com.sportradar.scoreboard.model.Match;
 import com.sportradar.scoreboard.Scoreboard;
 import com.sportradar.scoreboard.exception.MatchNotFoundException;
 import org.junit.jupiter.api.RepeatedTest;
@@ -183,7 +183,6 @@ public class ScoreboardMultiThreadIntegrationTest {
     }
 
     private static void assertFirstMatch(Match firstMatch, long matchId, Match runningMatch) {
-
         assertEquals(firstMatch.id(), runningMatch.id());
         assertEquals(firstMatch.homeTeamScore().score(), runningMatch.homeTeamScore().score());
         assertEquals(firstMatch.awayTeamScore().score(), runningMatch.awayTeamScore().score());

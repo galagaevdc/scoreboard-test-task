@@ -1,9 +1,15 @@
-package com.sportradar.scoreboard;
+package com.sportradar.scoreboard.model;
 
 import java.time.LocalDateTime;
+import java.util.Objects;
 
-//TODO: Consider required fields validations
 public record Match(long id, Score homeTeamScore, Score awayTeamScore, LocalDateTime startDate, boolean finished) {
+
+    public Match {
+        Objects.requireNonNull(homeTeamScore, "homeTeamScore cannot be null");
+        Objects.requireNonNull(awayTeamScore, "awayTeamScore cannot be null");
+        Objects.requireNonNull(startDate, "startDate cannot be null");
+    }
 
     public Match createMatchCopy(int homeTeamScore, int awayTeamScore) {
         return new Match(id, new Score(homeTeamScore().country(), homeTeamScore),
@@ -15,7 +21,7 @@ public record Match(long id, Score homeTeamScore, Score awayTeamScore, LocalDate
     }
 
     public MatchSortKey compoundSortKey() {
-        return new MatchSortKey(homeTeamScore().score() + awayTeamScore().score(), startDate());
+        return new MatchSortKey(homeTeamScore().score() + awayTeamScore().score(), this);
     }
 
 }

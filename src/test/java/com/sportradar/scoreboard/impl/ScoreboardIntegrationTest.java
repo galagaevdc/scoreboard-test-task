@@ -1,6 +1,6 @@
 package com.sportradar.scoreboard.impl;
 
-import com.sportradar.scoreboard.Match;
+import com.sportradar.scoreboard.model.Match;
 import com.sportradar.scoreboard.Scoreboard;
 import org.junit.jupiter.api.Test;
 

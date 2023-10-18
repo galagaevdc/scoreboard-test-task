@@ -1,5 +1,7 @@
 package com.sportradar.scoreboard;
 
+import com.sportradar.scoreboard.model.Match;
+
 import java.time.LocalDateTime;
 import java.util.Collection;
 
